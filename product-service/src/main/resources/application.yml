@@ -1,0 +1,62 @@
+spring:
+  application:
+    name: product-service
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+  kafka:
+    consumer:
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      auto-offset-reset: earliest
+      group-id: products-consumer
+      properties:
+        spring:
+          json:
+            trusted:
+              packages: com.api.gateway.dto
+    template:
+      default-topic: new-products-events
+    bootstrap-servers: localhost:9092,localhost:903,localhost:9094
+
+  flyway:
+    out-of-order: true
+    default-schema: product_db
+    locations:
+      - classpath:db/migration
+
+    sleuth:
+      propagation:
+        type: w3c,b3
+
+server:
+  port: 7003
+
+management:
+  metrics:
+    tags:
+      application: product-service
+  tracing:
+    propagation:
+      consume: W3C
+  endpoint:
+    metrics:
+      enabled: true
+    prometheus:
+      enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+
+logstash:
+  host: localhost
+  port: 50000
+
+consumer:
+  topic:
+    name: new-products-events
+
+logging:
+  level:
+    org.springframework.cache: TRACE
+    org.springframework.cache.interceptor: TRACE
+    com.github.benmanes.caffeine.cache: TRACE

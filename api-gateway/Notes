@@ -1,0 +1,8 @@
+
+
+gateway-api
+        -> /user-service/ -> user-service apis
+        ->/invoice-service/ -> invoice-service apis
+
+
+/user-service/v1/users(api-gateway) --> user-service apis /v1/users

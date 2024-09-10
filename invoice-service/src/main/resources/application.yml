@@ -1,0 +1,28 @@
+spring:
+  application:
+    name: invoice-service
+
+  flyway:
+    default-schema: invoice_db
+  locations:
+    - classpath:db/migration
+
+server:
+  port: 7002
+
+logstash:
+  host: localhost
+  port: 50000
+
+
+management:
+  metrics:
+    tags:
+      application: invoice-service
+  tracing:
+    propagation:
+      consume: W3C
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus

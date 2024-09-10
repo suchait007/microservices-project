@@ -1,0 +1,7 @@
+
+
+GET /v1/users query parameter ids => multiple (List
+
+database migration -> user, insert dummy data
+entities
+jpa, service, controller

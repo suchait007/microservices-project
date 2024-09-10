@@ -1,0 +1,359 @@
+version: '3.7'
+
+services:
+
+  # The 'setup' service runs a one-off script which initializes users inside
+  # Elasticsearch — such as 'logstash_internal' and 'kibana_system' — with the
+  # values of the passwords defined in the '.env' file. It also creates the
+  # roles required by some of these users.
+  #
+  # This task only needs to be performed once, during the *initial* startup of
+  # the stack. Any subsequent run will reset the passwords of existing users to
+  # the values defined inside the '.env' file, and the built-in roles to their
+  # default permissions.
+  #
+  # By default, it is excluded from the services started by 'docker compose up'
+  # due to the non-default profile it belongs to. To run it, either provide the
+  # '--profile=setup' CLI flag to Compose commands, or "up" the service by name
+  # such as 'docker compose up setup'.
+  setup:
+    profiles:
+      - setup
+    build:
+      context: setup/
+      args:
+        ELASTIC_VERSION: ${ELASTIC_VERSION}
+    init: true
+    volumes:
+      - ./setup/entrypoint.sh:/entrypoint.sh:ro,Z
+      - ./setup/lib.sh:/lib.sh:ro,Z
+      - ./setup/roles:/roles:ro,Z
+    environment:
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD:-}
+      LOGSTASH_INTERNAL_PASSWORD: ${LOGSTASH_INTERNAL_PASSWORD:-}
+      KIBANA_SYSTEM_PASSWORD: ${KIBANA_SYSTEM_PASSWORD:-}
+      METRICBEAT_INTERNAL_PASSWORD: ${METRICBEAT_INTERNAL_PASSWORD:-}
+      FILEBEAT_INTERNAL_PASSWORD: ${FILEBEAT_INTERNAL_PASSWORD:-}
+      HEARTBEAT_INTERNAL_PASSWORD: ${HEARTBEAT_INTERNAL_PASSWORD:-}
+      MONITORING_INTERNAL_PASSWORD: ${MONITORING_INTERNAL_PASSWORD:-}
+      BEATS_SYSTEM_PASSWORD: ${BEATS_SYSTEM_PASSWORD:-}
+    networks:
+      - elk
+    depends_on:
+      - elasticsearch
+
+  elasticsearch:
+    build:
+      context: elasticsearch/
+      args:
+        ELASTIC_VERSION: ${ELASTIC_VERSION}
+    volumes:
+      - ./elasticsearch/config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro,Z
+      - elasticsearch:/usr/share/elasticsearch/data:Z
+    ports:
+      - 9200:9200
+      - 9300:9300
+    environment:
+      node.name: elasticsearch
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD:-}
+      discovery.type: single-node
+    networks:
+      - elk
+    restart: unless-stopped
+
+  logstash:
+    build:
+      context: logstash/
+      args:
+        ELASTIC_VERSION: ${ELASTIC_VERSION}
+    volumes:
+      - ./logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro,Z
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro,Z
+    ports:
+      - 5044:5044
+      - 50000:50000/tcp
+      - 50000:50000/udp
+      - 9600:9600
+    environment:
+      LS_JAVA_OPTS: "-Xms256m -Xmx256m"
+      LOGSTASH_INTERNAL_PASSWORD: ${LOGSTASH_INTERNAL_PASSWORD:-}
+    networks:
+      - elk
+    depends_on:
+      - elasticsearch
+    restart: unless-stopped
+
+  kibana:
+    build:
+      context: kibana/
+      args:
+        ELASTIC_VERSION: ${ELASTIC_VERSION}
+    volumes:
+      - ./kibana/config/kibana.yml:/usr/share/kibana/config/kibana.yml:ro,Z
+    ports:
+      - 5601:5601
+    environment:
+      KIBANA_SYSTEM_PASSWORD: ${KIBANA_SYSTEM_PASSWORD:-}
+    networks:
+      - elk
+    depends_on:
+      - elasticsearch
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    ports:
+      - "9090:9090"
+    networks:
+      - keycloak_network
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    networks:
+      - keycloak_network
+
+  postgres:
+    image: postgres:16.2
+    ports:
+      - 5432:5432
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    networks:
+      - keycloak_network
+
+  keycloak-access-mgmt:
+    image: quay.io/keycloak/keycloak:23.0.6
+    command: start
+    environment:
+      KC_HOSTNAME: keycloak-access-mgmt
+      KC_HOSTNAME_PORT: "8080" # Ensure this is a string
+      KC_HOSTNAME_STRICT_BACKCHANNEL: "false" # Ensure this is a string
+      KC_HTTP_ENABLED: "true" # Ensure this is a string
+      KC_HOSTNAME_STRICT_HTTPS: "false" # Ensure this is a string
+      KC_HEALTH_ENABLED: "true" # Ensure this is a string
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres/${POSTGRES_DB}
+      KC_DB_USERNAME: ${POSTGRES_USER}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      KC_PROXY_HEADERS: forwarded
+    ports:
+      - 8080:8080
+    restart: always
+    depends_on:
+      - postgres
+    networks:
+      - keycloak_network
+
+  kafdrop:
+    image: obsidiandynamics/kafdrop
+    restart: "no"
+    ports:
+      - "9000:9000"
+    environment:
+      KAFKA_BROKERCONNECT: "kafka1:19092,kafka2:19093,kafka3:19094"
+    depends_on:
+      - kafka1
+      - kafka2
+      - kafka3
+    networks:
+      - keycloak_network
+
+  zoo1:
+    image: confluentinc/cp-zookeeper:7.3.2
+    hostname: zoo1
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: "2181" # Ensure this is a string
+      ZOOKEEPER_SERVER_ID: "1" # Ensure this is a string
+      ZOOKEEPER_SERVERS: "zoo1:2888:3888" # Ensure this is a string
+    networks:
+      - keycloak_network
+
+  kafka1:
+    image: confluentinc/cp-kafka:7.3.2
+    hostname: kafka1
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka1:19092,EXTERNAL://${DOCKER_HOST_IP:-127.0.0.1}:9092,DOCKER://host.docker.internal:29092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,DOCKER:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+      KAFKA_ZOOKEEPER_CONNECT: "zoo1:2181"
+      KAFKA_BROKER_ID: "1" # Ensure this is a string
+      KAFKA_LOG4J_LOGGERS: "kafka.controller=INFO,kafka.producer.async.DefaultEventHandler=INFO,state.change.logger=INFO"
+      KAFKA_AUTHORIZER_CLASS_NAME: "kafka.security.authorizer.AclAuthorizer"
+      KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: "true" # Ensure this is a string
+    depends_on:
+      - zoo1
+    networks:
+      - keycloak_network
+
+  kafka2:
+    image: confluentinc/cp-kafka:7.3.2
+    hostname: kafka2
+    ports:
+      - "9093:9093"
+      - "29093:29093"
+    environment:
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka2:19093,EXTERNAL://${DOCKER_HOST_IP:-127.0.0.1}:9093,DOCKER://host.docker.internal:29093"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,DOCKER:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+      KAFKA_ZOOKEEPER_CONNECT: "zoo1:2181"
+      KAFKA_BROKER_ID: "2" # Ensure this is a string
+      KAFKA_LOG4J_LOGGERS: "kafka.controller=INFO,kafka.producer.async.DefaultEventHandler=INFO,state.change.logger=INFO"
+      KAFKA_AUTHORIZER_CLASS_NAME: "kafka.security.authorizer.AclAuthorizer"
+      KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: "true" # Ensure this is a string
+    depends_on:
+      - zoo1
+    networks:
+      - keycloak_network
+
+  kafka3:
+    image: confluentinc/cp-kafka:7.3.2
+    hostname: kafka3
+    ports:
+      - "9094:9094"
+      - "29094:29094"
+    environment:
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka3:19094,EXTERNAL://${DOCKER_HOST_IP:-127.0.0.1}:9094,DOCKER://host.docker.internal:29094"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,DOCKER:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+      KAFKA_ZOOKEEPER_CONNECT: "zoo1:2181"
+      KAFKA_BROKER_ID: "3" # Ensure this is a string
+      KAFKA_LOG4J_LOGGERS: "kafka.controller=INFO,kafka.producer.async.DefaultEventHandler=INFO,state.change.logger=INFO"
+      KAFKA_AUTHORIZER_CLASS_NAME: "kafka.security.authorizer.AclAuthorizer"
+      KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: "true" # Ensure this is a string
+    depends_on:
+      - zoo1
+    networks:
+      - keycloak_network
+
+  invoice-service:
+    image: course20/invoice-service:6.0
+    ports:
+      - "7002:7002"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/citizix_db
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      SPRING_JPA_DATABASE_PLATFORM: org.hibernate.dialect.PostgreSQLDialect
+      LOGSTASH_HOST: logstash
+      LOGSTASH_PORT: "50000" # Ensure this is a string
+      ELASTIC_APM_SERVICE_NAME: invoice-service
+      ELASTIC_APM_SERVER_URL: http://apm-server:8200
+      ELASTIC_APM_APPLICATION_PACKAGES: com.invoice.service
+    networks:
+      - keycloak_network
+      - elk
+    depends_on:
+      - postgres
+      - logstash
+      - apm-server
+      - fleet-server
+
+  user-service:
+    image: course20/user-service:3.0
+    ports:
+      - "7001:7001"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/citizix_db
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      SPRING_JPA_DATABASE_PLATFORM: org.hibernate.dialect.PostgreSQLDialect
+      LOGSTASH_HOST: logstash
+      LOGSTASH_PORT: "50000" # Ensure this is a string
+      ELASTIC_APM_SERVICE_NAME: user-service
+      ELASTIC_APM_SERVER_URL: http://apm-server:8200
+      ELASTIC_APM_APPLICATION_PACKAGES: com.user.service
+      INVOICE_SERVICE_URL: http://invoice-service:7002
+    networks:
+      - keycloak_network
+      - elk
+    depends_on:
+      - postgres
+      - logstash
+      - apm-server
+      - fleet-server
+
+  api-gateway:
+    image: course20/api-gateway:3.0
+    ports:
+      - "6500:6500"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak-access-mgmt:8080/realms/retail
+      SECURITY_JWT: http://keycloak-access-mgmt:8080/realms/retail/protocol/openid-connect/certs
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: host.docker.internal:29092,host.docker.internal:29093,host.docker.internal:29094
+      LOGSTASH_HOST: logstash
+      LOGSTASH_PORT: "50000" # Ensure this is a string
+      ELASTIC_APM_SERVICE_NAME: api-gateway
+      ELASTIC_APM_SERVER_URL: http://apm-server:8200
+      ELASTIC_APM_APPLICATION_PACKAGES: com.api.gateway
+    networks:
+      - keycloak_network
+      - elk
+    depends_on:
+      - postgres
+      - logstash
+      - apm-server
+      - fleet-server
+      - kafka1
+      - kafka2
+      - kafka3
+
+  product-service:
+    image: course20/product-service:2.0
+    ports:
+      - "7003:7003"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/citizix_db
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      SPRING_JPA_DATABASE_PLATFORM: org.hibernate.dialect.PostgreSQLDialect
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: host.docker.internal:29092,host.docker.internal:29093,host.docker.internal:29094
+      LOGSTASH_HOST: logstash
+      LOGSTASH_PORT: "50000" # Ensure this is a string
+      ELASTIC_APM_SERVICE_NAME: product-service
+      ELASTIC_APM_SERVER_URL: http://apm-server:8200
+      ELASTIC_APM_APPLICATION_PACKAGES: com.product
+      MANAGEMENT_METRICS_TAGS_APPLICATION: product-service
+    networks:
+      - keycloak_network
+      - elk
+    depends_on:
+      - postgres
+      - logstash
+      - apm-server
+      - fleet-server
+      - kafka1
+      - kafka2
+      - kafka3
+
+networks:
+  elk:
+    driver: bridge
+  keycloak_network:
+    driver: bridge
+
+volumes:
+  elasticsearch:
+  postgres_data:
+    driver: local
+  grafana-storage:

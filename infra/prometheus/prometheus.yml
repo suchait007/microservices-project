@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'invoice-service-job'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: [ 'invoice-service:7002' ]
+  - job_name: 'user-service-job'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: [ 'user-service:7001' ]
+  - job_name: 'product-service-job'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: [ 'product-service:7003' ]

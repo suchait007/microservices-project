@@ -1,0 +1,52 @@
+spring:
+  application:
+    name: user-service
+
+  flyway:
+    default-schema: user_db
+  locations:
+    - classpath:db/migration
+
+server:
+  port: 7001
+
+invoice:
+  service:
+    url: http://localhost:7002
+
+logging:
+  level:
+    org.springframework.retry: DEBUG
+    org.springframework.retry.annotation: DEBUG
+
+feign:
+  client:
+    config:
+      invoice-service-feign-client:
+        connectTimeout: 5000
+        readTimeout: 8000
+
+
+logstash:
+  host: localhost
+  port: 50000
+
+management:
+  metrics:
+    tags:
+      application: user-service
+  tracing:
+    propagation:
+      consume: W3C
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /api-docs
+
+

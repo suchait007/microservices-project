@@ -1,0 +1,14 @@
+
+
+GET /v1/invoices
+
+api
+
+String = user_id (controller)
+service -> repos -> table in database
+
+Exception handling
+
+Error object, Exception class
+
+throw Exception -> rest controller for exceptions -> error object in response (400, msg, details)

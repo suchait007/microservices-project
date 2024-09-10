@@ -1,0 +1,83 @@
+spring:
+  application:
+    name: api-gateway
+  main:
+    allow-bean-definition-overriding: true
+  security:
+    oauth2:
+      resource-server:
+        jwt:
+          issuer-uri: http://keycloak-access-mgmt:8080/realms/retail
+  kafka:
+    template:
+      default-topic: new-products-events
+    bootstrap-servers: localhost:9092,localhost:9093,localhost:9094
+    producer:
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+  cloud:
+    gateway:
+      routes[0]:
+        id: user-service-route
+        uri: http://user-service:7001
+        predicates:
+          - Path=/user-service/v1/users
+        filters:
+          - RewritePath=/user-service/v1/users, /v1/users
+          - name: CircuitBreaker
+            args:
+              name: userServiceCircuitBreaker
+              fallbackUri: forward:/fallback
+
+      routes[1]:
+        id: invoice-service-route
+        uri: http://invoice:7002
+        predicates:
+          - Path=/invoice-service/v1/invoices
+        filters:
+          - RewritePath=/invoice-service/v1/invoices, /v1/invoices
+          - name: CircuitBreaker
+            args:
+              name: invoiceServiceCircuitBreaker
+              fallbackUri: forward:/fallback
+
+server:
+  port: 6500
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      userServiceCircuitBreaker:
+        registerHealthIndicator: true
+        slidingWindowSize: 10
+        permittedNumberOfCallsInHalfOpenState: 5
+        waitDurationInOpenState: 10000
+        failureRateThreshold: 50
+      invoiceServiceCircuitBreaker:
+        registerHealthIndicator: true
+        slidingWindowSize: 10
+        permittedNumberOfCallsInHalfOpenState: 5
+        waitDurationInOpenState: 10000
+        failureRateThreshold: 50
+
+
+management:
+  tracing:
+    propagation:
+      consume: W3C
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+
+security:
+  jwt: http://keycloak-access-mgmt:8080/realms/retail/protocol/openid-connect/certs
+
+logstash:
+  host: localhost
+  port: 50000
+
+producer:
+  topic:
+    name: new-products-events
+
